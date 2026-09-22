@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>庫存進貨系統3</title>
+  <title>庫存進貨系統</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Quagga2 一維條碼專用掃描套件 -->
   <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
-  <!-- SheetJS (xlsx.full.min.js) 套件 (支援中文編碼) -->
+  <!-- SheetJS (xlsx.full.min.js) 套件 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     /* 修正 Quagga 產生的相機畫面顯示大小 */
@@ -243,7 +243,7 @@
       lastScannedCode = "";
     }
 
-    // ===== 功能 2: Excel / CSV 檔案讀取與預覽（強化中文編碼支援） =====
+    // ===== 功能 2: Excel / CSV 檔案讀取與預覽（終極強化中文與多格式支援） =====
     let batchData = [];
 
     document.getElementById('excel-file').addEventListener('change', function(e) {
@@ -251,7 +251,7 @@
       if (!file) return;
 
       const reader = new FileReader();
-      const isCsv = file.name.endsWith('.csv');
+      const isCsv = file.name.toLowerCase().endsWith('.csv');
 
       reader.onload = function(evt) {
         try {
@@ -259,41 +259,54 @@
           const data = evt.target.result;
 
           if (isCsv) {
-            // 處理 CSV 的中文 Big5 / ANSI 轉碼問題
-            let text = new TextDecoder('utf-8').decode(new Uint8Array(data));
-            // 若 UTF-8 解析出現替換字元 ，代表是繁體中文 Big5 編碼
+            // 雙重編碼檢查：解決 Windows Excel 產生的 Big5 / ANSI CSV 亂碼與空白問題
+            const uint8 = new Uint8Array(data);
+            let text = new TextDecoder('utf-8').decode(uint8);
+            
+            // 包含 特殊亂碼符號時自動切換為 Big5 解析
             if (text.includes('')) {
-              text = new TextDecoder('big5').decode(new Uint8Array(data));
+              text = new TextDecoder('big5').decode(uint8);
             }
-            workbook = XLSX.read(text, { type: 'string' });
+            workbook = XLSX.read(text, { type: 'string', raw: false });
           } else {
-            // 處理 .xlsx / .xls 檔案
+            // .xlsx / .xls 檔案解析
             const arrayData = new Uint8Array(data);
-            workbook = XLSX.read(arrayData, { type: 'array' });
+            workbook = XLSX.read(arrayData, { type: 'array', raw: false });
           }
           
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+          
+          // raw: false 強制轉換所有儲存格為純文字（格式化後的值）
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
 
-          // 模糊判斷與轉換欄位名稱
+          // 模糊判斷與超強彈性欄位對應（去除所有前後空格與全形空白）
           batchData = jsonData.map(row => {
-            const findValue = (keys) => {
-              for (let key of Object.keys(row)) {
-                if (keys.some(k => key.trim().toLowerCase() === k.toLowerCase())) {
-                  return row[key];
+            const findValue = (possibleKeys) => {
+              for (let originalKey of Object.keys(row)) {
+                // 清除標題欄位的空白與轉小寫
+                const cleanKey = originalKey.toString().replace(/[\s\uFEFF\xA0]/g, '').toLowerCase();
+                for (let k of possibleKeys) {
+                  if (cleanKey === k.toLowerCase()) {
+                    return row[originalKey];
+                  }
                 }
               }
               return '';
             };
 
+            const rawBarcode = findValue(['條碼', 'barcode', '條形碼', '條碼編號', 'code']);
+            const rawName = findValue(['商品名稱', '名稱', 'name', '品名', '商品', '項目']);
+            const rawQty = findValue(['數量', 'quantity', '進貨數量', 'qty', '數']);
+            const rawPrice = findValue(['單價', 'price', '價格', '金額', '售價']);
+
             return {
-              barcode: String(findValue(['條碼', 'Barcode', '條形碼']) || '').trim(),
-              name: String(findValue(['商品名稱', '名稱', 'Name', '品名']) || '').trim(),
-              quantity: Number(findValue(['數量', 'Quantity', '進貨數量', 'Qty'])) || 1,
-              price: Number(findValue(['單價', 'Price', '價格'])) || 0
+              barcode: String(rawBarcode || '').replace(/[\s\uFEFF\xA0]/g, ''),
+              name: String(rawName || '').trim(),
+              quantity: Number(String(rawQty).replace(/[^\d.]/g, '')) || 1,
+              price: Number(String(rawPrice).replace(/[^\d.]/g, '')) || 0
             };
-          });
+          }).filter(item => item.barcode !== '' || item.name !== ''); // 過濾空行
 
           renderPreviewTable(batchData);
         } catch (err) {
@@ -310,7 +323,8 @@
       tbody.innerHTML = '';
 
       if (data.length === 0) {
-        alert("未讀取到有效的表格資料！");
+        alert("未讀取到有效的表格資料！請確認檔案標題是否有「條碼」與「商品名稱」。");
+        document.getElementById('preview-container').classList.add('hidden');
         return;
       }
 
@@ -318,7 +332,7 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td class="px-4 py-2">${item.barcode}</td>
-          <td class="px-4 py-2">${item.name}</td>
+          <td class="px-4 py-2 font-medium text-gray-800">${item.name}</td>
           <td class="px-4 py-2">${item.quantity}</td>
           <td class="px-4 py-2">${item.price}</td>
         `;
