@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>庫存進貨系統</title>
+  <title>庫存進貨系統3</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Quagga2 一維條碼專用掃描套件 -->
@@ -236,94 +236,153 @@
       sendDataToGAS(payload);
     });
 
-    // 重置表單並回歸預設狀態，準備掃下一筆
+    // 重置表單
     function resetFormToDefault() {
       document.getElementById('single-entry-form').reset();
       document.getElementById('quantity').value = "1";
       lastScannedCode = "";
     }
 
-    // ===== 功能 2: Excel / CSV 檔案讀取與預覽（終極強化中文與多格式支援） =====
+    // ===== 功能 2: CSV / Excel 雙模讀取 (修正中文字與 CSV 讀取) =====
     let batchData = [];
 
     document.getElementById('excel-file').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
 
-      const reader = new FileReader();
-      const isCsv = file.name.toLowerCase().endsWith('.csv');
+      const fileName = file.name.toLowerCase();
+      const isCsv = fileName.endsWith('.csv');
 
-      reader.onload = function(evt) {
-        try {
-          let workbook;
-          const data = evt.target.result;
-
-          if (isCsv) {
-            // 雙重編碼檢查：解決 Windows Excel 產生的 Big5 / ANSI CSV 亂碼與空白問題
-            const uint8 = new Uint8Array(data);
-            let text = new TextDecoder('utf-8').decode(uint8);
-            
-            // 包含 特殊亂碼符號時自動切換為 Big5 解析
-            if (text.includes('')) {
-              text = new TextDecoder('big5').decode(uint8);
-            }
-            workbook = XLSX.read(text, { type: 'string', raw: false });
+      if (isCsv) {
+        // 使用 FileReader 嘗試 UTF-8，若失敗降級使用 Big5
+        readCsvFile(file, 'utf-8', (text) => {
+          // 若發現 UTF-8 替代字元，代表可能是 Big5 繁體中文，用 big5 重讀
+          if (text.includes('')) {
+            readCsvFile(file, 'big5', (big5Text) => {
+              parseCsvText(big5Text);
+            });
           } else {
-            // .xlsx / .xls 檔案解析
-            const arrayData = new Uint8Array(data);
-            workbook = XLSX.read(arrayData, { type: 'array', raw: false });
+            parseCsvText(text);
           }
-          
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          
-          // raw: false 強制轉換所有儲存格為純文字（格式化後的值）
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
-
-          // 模糊判斷與超強彈性欄位對應（去除所有前後空格與全形空白）
-          batchData = jsonData.map(row => {
-            const findValue = (possibleKeys) => {
-              for (let originalKey of Object.keys(row)) {
-                // 清除標題欄位的空白與轉小寫
-                const cleanKey = originalKey.toString().replace(/[\s\uFEFF\xA0]/g, '').toLowerCase();
-                for (let k of possibleKeys) {
-                  if (cleanKey === k.toLowerCase()) {
-                    return row[originalKey];
-                  }
-                }
-              }
-              return '';
-            };
-
-            const rawBarcode = findValue(['條碼', 'barcode', '條形碼', '條碼編號', 'code']);
-            const rawName = findValue(['商品名稱', '名稱', 'name', '品名', '商品', '項目']);
-            const rawQty = findValue(['數量', 'quantity', '進貨數量', 'qty', '數']);
-            const rawPrice = findValue(['單價', 'price', '價格', '金額', '售價']);
-
-            return {
-              barcode: String(rawBarcode || '').replace(/[\s\uFEFF\xA0]/g, ''),
-              name: String(rawName || '').trim(),
-              quantity: Number(String(rawQty).replace(/[^\d.]/g, '')) || 1,
-              price: Number(String(rawPrice).replace(/[^\d.]/g, '')) || 0
-            };
-          }).filter(item => item.barcode !== '' || item.name !== ''); // 過濾空行
-
-          renderPreviewTable(batchData);
-        } catch (err) {
-          console.error("檔案讀取失敗:", err);
-          alert("檔案讀取失敗，請確認檔案格式是否正確！");
-        }
-      };
-
-      reader.readAsArrayBuffer(file);
+        });
+      } else {
+        // .xlsx / .xls 使用 SheetJS 讀取
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+          try {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array', raw: false });
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
+            processRawJsonData(jsonData);
+          } catch (err) {
+            console.error("Excel 讀取失敗:", err);
+            alert("Excel 檔案格式解析失敗！");
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      }
     });
+
+    // CSV 文字檔專用讀取器
+    function readCsvFile(file, encoding, callback) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        callback(e.target.result);
+      };
+      reader.readAsText(file, encoding);
+    }
+
+    // CSV 純文字解析（雙重防護：解決 SheetJS 有時無法正確切割 CSV 的問題）
+    function parseCsvText(csvText) {
+      // 移除 BOM 頭
+      csvText = csvText.replace(/^\uFEFF/, '');
+      const lines = csvText.split(/\r\n|\n|\r/);
+      if (lines.length === 0) {
+        alert("CSV 檔案為空");
+        return;
+      }
+
+      // 切分第一列作為標頭
+      const headers = parseCsvLine(lines[0]);
+      const jsonData = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const currentLine = parseCsvLine(lines[i]);
+        const row = {};
+        headers.forEach((h, index) => {
+          row[h] = currentLine[index] !== undefined ? currentLine[index] : '';
+        });
+        jsonData.push(row);
+      }
+
+      processRawJsonData(jsonData);
+    }
+
+    // 解析 CSV 單列（處理逗號與雙引號）
+    function parseCsvLine(line) {
+      const result = [];
+      let start = 0;
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') {
+          inQuotes = !inQuotes;
+        } else if (line[i] === ',' && !inQuotes) {
+          let field = line.substring(start, i).trim();
+          if (field.startsWith('"') && field.endsWith('"')) {
+            field = field.substring(1, field.length - 1).replace(/""/g, '"');
+          }
+          result.push(field);
+          start = i + 1;
+        }
+      }
+      let lastField = line.substring(start).trim();
+      if (lastField.startsWith('"') && lastField.endsWith('"')) {
+        lastField = lastField.substring(1, lastField.length - 1).replace(/""/g, '"');
+      }
+      result.push(lastField);
+      return result;
+    }
+
+    // 處理與比對欄位資料
+    function processRawJsonData(jsonData) {
+      batchData = jsonData.map(row => {
+        const findValue = (possibleKeys) => {
+          for (let originalKey of Object.keys(row)) {
+            const cleanKey = originalKey.toString().replace(/[\s\uFEFF\xA0]/g, '').toLowerCase();
+            for (let k of possibleKeys) {
+              if (cleanKey === k.toLowerCase()) {
+                return row[originalKey];
+              }
+            }
+          }
+          return '';
+        };
+
+        const rawBarcode = findValue(['條碼', 'barcode', '條形碼', '條碼編號', 'code']);
+        const rawName = findValue(['商品名稱', '名稱', 'name', '品名', '商品', '項目']);
+        const rawQty = findValue(['數量', 'quantity', '進貨數量', 'qty', '數']);
+        const rawPrice = findValue(['單價', 'price', '價格', '金額', '售價']);
+
+        return {
+          barcode: String(rawBarcode || '').replace(/[\s\uFEFF\xA0]/g, ''),
+          name: String(rawName || '').trim(),
+          quantity: Number(String(rawQty).replace(/[^\d.]/g, '')) || 1,
+          price: Number(String(rawPrice).replace(/[^\d.]/g, '')) || 0
+        };
+      }).filter(item => item.barcode !== '' || item.name !== '');
+
+      renderPreviewTable(batchData);
+    }
 
     function renderPreviewTable(data) {
       const tbody = document.getElementById('preview-body');
       tbody.innerHTML = '';
 
       if (data.length === 0) {
-        alert("未讀取到有效的表格資料！請確認檔案標題是否有「條碼」與「商品名稱」。");
+        alert("未讀取到有效的表格資料！請確認表格第一行為標題（含有『條碼』與『商品名稱』）。");
         document.getElementById('preview-container').classList.add('hidden');
         return;
       }
@@ -367,7 +426,7 @@
         body: JSON.stringify(dataArray)
       })
       .then(() => {
-        alert('✅ 進貨資料已送出！');
+        alert('✅ 進貨資料已送出！請查看 Google 試算表。');
         
         resetFormToDefault();
 
