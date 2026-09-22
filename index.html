@@ -64,7 +64,7 @@
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">商品名稱</label>
-        <input type="text" id="product-name" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="例如：無印良品筆記本">
+        <input type="text" id="product-name" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="例如：草莓口香糖">
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -87,7 +87,7 @@
     <div class="space-y-4">
       <h2 class="text-lg font-semibold text-gray-700">Excel / CSV 批次匯入</h2>
       <div>
-        <input type="file" id="excel-file" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+        <input type="file" id="excel-file" accept=".xlsx, .xls, .csv, .tsv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
       </div>
 
       <!-- 預覽表格 -->
@@ -115,7 +115,7 @@
     // Google Apps Script Web App URL
     const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyrdD8MCcwx80jnC6BGXNUKEJ6pwp8KuogbjMm0MBZTh_yQLhbWV5hj7rJXE25CbwfqRA/exec";
 
-    // 嗶聲提示 (Web Audio API)
+    // 嗶聲提示
     function playBeep() {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -133,7 +133,7 @@
       }
     }
 
-    // ===== Quagga2 一維條碼專用初始化 =====
+    // ===== Quagga2 相機掃描 =====
     let isCameraRunning = false;
     let lastScannedCode = "";
     let lastScannedTime = 0;
@@ -156,18 +156,10 @@
             height: { ideal: 720 }
           }
         },
-        locator: {
-          patchSize: "medium",
-          halfSample: true
-        },
+        locator: { patchSize: "medium", halfSample: true },
         numOfWorkers: 2,
         decoder: {
-          readers: [
-            "ean_reader",      // 13 碼條碼 (JAN / EAN-13)
-            "ean_8_reader",    // 8 碼條碼
-            "code_128_reader", // 物流/128 條碼
-            "upc_reader"       // 美規 UPC 條碼
-          ]
+          readers: ["ean_reader", "ean_8_reader", "code_128_reader", "upc_reader"]
         },
         locate: true
       }, function(err) {
@@ -183,22 +175,16 @@
 
       Quagga.onDetected(function(result) {
         if (!result || !result.codeResult) return;
-
         const code = result.codeResult.code;
         const now = Date.now();
-
-        if (code === lastScannedCode && (now - lastScannedTime) < 2000) {
-          return;
-        }
+        if (code === lastScannedCode && (now - lastScannedTime) < 2000) return;
 
         lastScannedCode = code;
         lastScannedTime = now;
-
         playBeep();
         
         const barcodeInput = document.getElementById('barcode');
         barcodeInput.value = code;
-
         barcodeInput.classList.add('bg-green-200');
         setTimeout(() => barcodeInput.classList.remove('bg-green-200'), 500);
       });
@@ -212,16 +198,11 @@
     }
 
     document.getElementById('btn-toggle-camera').addEventListener('click', () => {
-      if (isCameraRunning) {
-        stopQuagga();
-      } else {
-        initQuagga();
-      }
+      if (isCameraRunning) stopQuagga();
+      else initQuagga();
     });
 
-    window.addEventListener('DOMContentLoaded', () => {
-      initQuagga();
-    });
+    window.addEventListener('DOMContentLoaded', () => initQuagga());
 
     // 表單提交：單筆進貨
     document.getElementById('single-entry-form').addEventListener('submit', function(e) {
@@ -232,18 +213,16 @@
         quantity: document.getElementById('quantity').value,
         price: document.getElementById('unit-price').value
       }];
-      
       sendDataToGAS(payload);
     });
 
-    // 重置表單
     function resetFormToDefault() {
       document.getElementById('single-entry-form').reset();
       document.getElementById('quantity').value = "1";
       lastScannedCode = "";
     }
 
-    // ===== 功能 2: CSV / Excel 雙模讀取 (修正中文字與 CSV 讀取) =====
+    // ===== 功能 2: 超強相容 CSV / Excel 讀取引擎 =====
     let batchData = [];
 
     document.getElementById('excel-file').addEventListener('change', function(e) {
@@ -251,22 +230,17 @@
       if (!file) return;
 
       const fileName = file.name.toLowerCase();
-      const isCsv = fileName.endsWith('.csv');
+      const isCsv = fileName.endsWith('.csv') || fileName.endsWith('.tsv');
 
       if (isCsv) {
-        // 使用 FileReader 嘗試 UTF-8，若失敗降級使用 Big5
         readCsvFile(file, 'utf-8', (text) => {
-          // 若發現 UTF-8 替代字元，代表可能是 Big5 繁體中文，用 big5 重讀
           if (text.includes('')) {
-            readCsvFile(file, 'big5', (big5Text) => {
-              parseCsvText(big5Text);
-            });
+            readCsvFile(file, 'big5', (big5Text) => parseCsvText(big5Text));
           } else {
             parseCsvText(text);
           }
         });
       } else {
-        // .xlsx / .xls 使用 SheetJS 讀取
         const reader = new FileReader();
         reader.onload = function(evt) {
           try {
@@ -285,32 +259,37 @@
       }
     });
 
-    // CSV 文字檔專用讀取器
     function readCsvFile(file, encoding, callback) {
       const reader = new FileReader();
-      reader.onload = function(e) {
-        callback(e.target.result);
-      };
+      reader.onload = (e) => callback(e.target.result);
       reader.readAsText(file, encoding);
     }
 
-    // CSV 純文字解析（雙重防護：解決 SheetJS 有時無法正確切割 CSV 的問題）
+    // 智慧動態偵測分隔符號 (逗號、分號、TAB)
     function parseCsvText(csvText) {
-      // 移除 BOM 頭
-      csvText = csvText.replace(/^\uFEFF/, '');
+      csvText = csvText.replace(/^\uFEFF/, '').trim();
       const lines = csvText.split(/\r\n|\n|\r/);
       if (lines.length === 0) {
         alert("CSV 檔案為空");
         return;
       }
 
-      // 切分第一列作為標頭
-      const headers = parseCsvLine(lines[0]);
+      // 智慧判斷分隔符號：點數最多出現的符號 (逗號 , 、分號 ; 或 TAB \t)
+      const firstLine = lines[0];
+      const commaCount = (firstLine.match(/,/g) || []).length;
+      const semicolonCount = (firstLine.match(/;/g) || []).length;
+      const tabCount = (firstLine.match(/\t/g) || []).length;
+
+      let delimiter = ',';
+      if (tabCount > commaCount && tabCount > semicolonCount) delimiter = '\t';
+      else if (semicolonCount > commaCount && semicolonCount > tabCount) delimiter = ';';
+
+      const headers = parseCsvLine(lines[0], delimiter);
       const jsonData = [];
 
       for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
-        const currentLine = parseCsvLine(lines[i]);
+        const currentLine = parseCsvLine(lines[i], delimiter);
         const row = {};
         headers.forEach((h, index) => {
           row[h] = currentLine[index] !== undefined ? currentLine[index] : '';
@@ -321,15 +300,14 @@
       processRawJsonData(jsonData);
     }
 
-    // 解析 CSV 單列（處理逗號與雙引號）
-    function parseCsvLine(line) {
+    function parseCsvLine(line, delimiter) {
       const result = [];
       let start = 0;
       let inQuotes = false;
       for (let i = 0; i < line.length; i++) {
         if (line[i] === '"') {
           inQuotes = !inQuotes;
-        } else if (line[i] === ',' && !inQuotes) {
+        } else if (line[i] === delimiter && !inQuotes) {
           let field = line.substring(start, i).trim();
           if (field.startsWith('"') && field.endsWith('"')) {
             field = field.substring(1, field.length - 1).replace(/""/g, '"');
@@ -346,7 +324,6 @@
       return result;
     }
 
-    // 處理與比對欄位資料
     function processRawJsonData(jsonData) {
       batchData = jsonData.map(row => {
         const findValue = (possibleKeys) => {
@@ -390,7 +367,7 @@
       data.forEach(item => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td class="px-4 py-2">${item.barcode}</td>
+          <td class="px-4 py-2 font-mono">${item.barcode}</td>
           <td class="px-4 py-2 font-medium text-gray-800">${item.name}</td>
           <td class="px-4 py-2">${item.quantity}</td>
           <td class="px-4 py-2">${item.price}</td>
@@ -426,11 +403,9 @@
         body: JSON.stringify(dataArray)
       })
       .then(() => {
-        alert('✅ 進貨資料已送出！請查看 Google 試算表。');
-        
+        alert('✅ 進貨資料已成功送出！');
         resetFormToDefault();
 
-        // 批次預覽區域一併重置
         document.getElementById('preview-container').classList.add('hidden');
         document.getElementById('excel-file').value = '';
         batchData = [];
