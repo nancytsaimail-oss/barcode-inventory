@@ -295,33 +295,32 @@
       sendDataToGAS(batchData);
     });
 
-    // ===== 功能 3: 傳送資料至 Google Apps Script API =====
+    // ===== 功能 3: 傳送資料至 Google Apps Script API (已修正 CORS 與傳輸模式) =====
     function sendDataToGAS(dataArray) {
       if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes("YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL")) {
         alert("請先設定 GAS_WEB_APP_URL 網址！");
         return;
       }
 
+      // 使用 text/plain 搭配 no-cors 模式，防止 GitHub Pages 跨網域請求被瀏覽器擋下
       fetch(GAS_WEB_APP_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
         body: JSON.stringify(dataArray)
       })
-      .then(res => res.json())
-      .then(res => {
-        if (res.status === 'success') {
-          alert(`成功上傳 ${res.count} 筆進貨資料！`);
-          document.getElementById('single-entry-form').reset();
-          document.getElementById('preview-container').classList.add('hidden');
-          document.getElementById('excel-file').value = '';
-          batchData = [];
-        } else {
-          alert('儲存失敗：' + res.message);
-        }
+      .then(() => {
+        alert(`進貨資料已成功送出！請至 Google 試算表確認。`);
+        document.getElementById('single-entry-form').reset();
+        document.getElementById('preview-container').classList.add('hidden');
+        document.getElementById('excel-file').value = '';
+        batchData = [];
       })
       .catch(err => {
         console.error(err);
-        alert('發生錯誤，請查看 Console log');
+        alert('上傳失敗：' + err.message);
       });
     }
   </script>
