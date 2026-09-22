@@ -3,13 +3,36 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>庫存進貨系統</title>
+  <title>庫存進貨系統3</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- html5-qrcode 套件 -->
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <!-- Quagga2 一維條碼專用掃描套件 -->
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
   <!-- SheetJS (xlsx.full.min.js) 套件 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    /* 修正 Quagga 產生的相機畫面顯示大小 */
+    #interactive.viewport video, #interactive.viewport canvas {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover;
+      border-radius: 0.5rem;
+    }
+    #interactive.viewport {
+      position: relative;
+      width: 100%;
+      height: 250px;
+      overflow: hidden;
+      background-color: #000;
+      border-radius: 0.5rem;
+    }
+    /* 繪製綠色對焦框指示 */
+    .drawingBuffer {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+  </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
   <div class="max-w-3xl mx-auto bg-white rounded-lg shadow-md p-6">
@@ -18,24 +41,18 @@
     <!-- 功能 1: 相機掃描條碼區域 -->
     <div class="mb-8 p-4 border border-gray-200 rounded-lg bg-gray-50">
       <div class="flex justify-between items-center mb-3">
-        <h2 class="text-lg font-semibold text-gray-700">相機掃描 Barcode / QR Code</h2>
-        <div class="space-x-2">
-          <button id="btn-toggle-camera" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded transition">
-            開啟/關閉相機
-          </button>
-          <button id="btn-switch-camera" type="button" class="bg-gray-600 hover:bg-gray-700 text-white text-xs px-3 py-1.5 rounded transition">
-            切換鏡頭
-          </button>
-        </div>
+        <h2 class="text-lg font-semibold text-gray-700">相機掃描商品條碼 (Quagga2 高效版)</h2>
+        <button id="btn-toggle-camera" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded transition">
+          開啟/關閉相機
+        </button>
       </div>
 
-      <!-- 錯誤與提示訊息顯示區 -->
+      <!-- 錯誤訊息提示區 -->
       <div id="camera-error" class="hidden mb-3 p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm"></div>
 
-      <!-- 掃描畫面容器 -->
-      <div id="reader" class="w-full max-w-md mx-auto bg-black rounded-lg overflow-hidden min-h-[260px] flex items-center justify-center text-white text-sm">
-        按下上方按鈕啟動相機
-      </div>
+      <!-- Quagga 視訊區域 -->
+      <div id="interactive" class="viewport"></div>
+      <p class="text-xs text-gray-500 text-center mt-2">請將商品條碼水平放置於鏡頭中央 (保持約 15 公分距離)</p>
     </div>
 
     <!-- 單筆進貨表單 -->
@@ -107,130 +124,108 @@
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.type = "sine";
-        osc.frequency.value = 1200;
+        osc.frequency.value = 1400;
         gain.gain.setValueAtTime(0.2, ctx.currentTime);
         osc.start();
-        osc.stop(ctx.currentTime + 0.12);
+        osc.stop(ctx.currentTime + 0.1);
       } catch (e) {
         console.warn("Audio Error:", e);
       }
     }
 
-    // ===== 相機與一維條碼強化模組 =====
-    let html5QrCode = null;
+    // ===== Quagga2 一維條碼專用初始化 =====
     let isCameraRunning = false;
-    let currentFacingMode = "environment";
     let lastScannedCode = "";
     let lastScannedTime = 0;
 
-    const cameraErrorEl = document.getElementById('camera-error');
-
-    function showError(msg) {
-      cameraErrorEl.textContent = msg;
-      cameraErrorEl.classList.remove('hidden');
-    }
-
-    function hideError() {
-      cameraErrorEl.classList.add('hidden');
-      cameraErrorEl.textContent = '';
-    }
-
-    async function startCamera() {
-      hideError();
-
-      // 檢查安全連線
+    function initQuagga() {
       if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        showError("⚠️ 注意：手機瀏覽器要求必須使用 HTTPS 網址才能開啟相機進行條碼對焦。");
+        document.getElementById('camera-error').textContent = "⚠️ 注意：手機瀏覽器強制要求必須在 HTTPS 安全網址下才能使用相機對焦。";
+        document.getElementById('camera-error').classList.remove('hidden');
         return;
       }
 
-      if (!html5QrCode) {
-        // 開啟實驗性 BarcodeDetector 功能（大幅提升 EAN-13 商品條碼辨識率）
-        html5QrCode = new Html5Qrcode("reader", {
-          experimentalFeatures: {
-            useBarCodeDetectorIfSupported: true
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: document.querySelector("#interactive"),
+          constraints: {
+            facingMode: "environment", // 使用後鏡頭
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
           }
-        });
-      }
-
-      // 相機參數：高幀率 + 高解析度請求
-      const config = {
-        fps: 20,
-        // 全畫面辨識，不使用 qrbox 裁切，有利於長條形一維條碼
-        videoConstraints: {
-          facingMode: currentFacingMode,
-          width: { min: 640, ideal: 1280, max: 1920 },
-          height: { min: 480, ideal: 720, max: 1080 }
+        },
+        locator: {
+          patchSize: "medium",
+          halfSample: true
+        },
+        numOfWorkers: 2,
+        decoder: {
+          readers: [
+            "ean_reader",      // 台灣/日本常用商品 13 碼條碼 (JAN / EAN-13)
+            "ean_8_reader",    // 8 碼條碼
+            "code_128_reader", // 物流/一般商品 128 條碼
+            "upc_reader"       // 美規 UPC 條碼
+          ]
+        },
+        locate: true
+      }, function(err) {
+        if (err) {
+          console.error("Quagga 初始化失敗:", err);
+          document.getElementById('camera-error').textContent = "❌ 無法啟動相機：" + err;
+          document.getElementById('camera-error').classList.remove('hidden');
+          return;
         }
-      };
-
-      try {
-        await html5QrCode.start(
-          { facingMode: currentFacingMode },
-          config,
-          (decodedText) => {
-            const now = Date.now();
-            // 防止同一個條碼在 2 秒內重複觸發
-            if (decodedText === lastScannedCode && (now - lastScannedTime) < 2000) {
-              return;
-            }
-            lastScannedCode = decodedText;
-            lastScannedTime = now;
-
-            playBeep();
-            const barcodeInput = document.getElementById('barcode');
-            barcodeInput.value = decodedText;
-            
-            // 閃爍視覺提示
-            barcodeInput.classList.add('bg-green-200');
-            setTimeout(() => barcodeInput.classList.remove('bg-green-200'), 500);
-          },
-          (errorMessage) => {
-            // 連續偵測中的 ignore callback
-          }
-        );
+        Quagga.start();
         isCameraRunning = true;
-      } catch (err) {
-        console.error("相機啟動失敗:", err);
+      });
+
+      // 監聽成功辨識事件
+      Quagga.onDetected(function(result) {
+        if (!result || !result.codeResult) return;
+
+        const code = result.codeResult.code;
+        const now = Date.now();
+
+        // 防止 2 秒內重複觸發
+        if (code === lastScannedCode && (now - lastScannedTime) < 2000) {
+          return;
+        }
+
+        lastScannedCode = code;
+        lastScannedTime = now;
+
+        playBeep();
+        
+        // 帶入條碼
+        const barcodeInput = document.getElementById('barcode');
+        barcodeInput.value = code;
+
+        // 輸入框綠色閃爍效果
+        barcodeInput.classList.add('bg-green-200');
+        setTimeout(() => barcodeInput.classList.remove('bg-green-200'), 500);
+      });
+    }
+
+    function stopQuagga() {
+      if (isCameraRunning) {
+        Quagga.stop();
         isCameraRunning = false;
-        if (err.toString().includes("NotAllowedError") || err.toString().includes("Permission")) {
-          showError("❌ 相機存取被拒絕，請點擊網址列鎖頭圖示允許開啟相機。");
-        } else {
-          showError("❌ 無法啟動相機：" + err);
-        }
       }
     }
 
-    async function stopCamera() {
-      if (html5QrCode && isCameraRunning) {
-        try {
-          await html5QrCode.stop();
-          isCameraRunning = false;
-          document.getElementById('reader').innerHTML = '相機已關閉';
-        } catch (err) {
-          console.error("關閉相機失敗:", err);
-        }
-      }
-    }
-
-    document.getElementById('btn-toggle-camera').addEventListener('click', async () => {
+    document.getElementById('btn-toggle-camera').addEventListener('click', () => {
       if (isCameraRunning) {
-        await stopCamera();
+        stopQuagga();
       } else {
-        await startCamera();
+        initQuagga();
       }
     });
 
-    document.getElementById('btn-switch-camera').addEventListener('click', async () => {
-      currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
-      if (isCameraRunning) {
-        await stopCamera();
-        await startCamera();
-      }
-    });
-
+    // 頁面開啟自動啟動相機
     window.addEventListener('DOMContentLoaded', () => {
-      startCamera();
+      initQuagga();
     });
 
     // 表單提交：單筆進貨
