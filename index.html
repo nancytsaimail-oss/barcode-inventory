@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>庫存進貨系統</title>
+  <title>庫存進貨系統3</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Quagga2 一維條碼專用掃描套件 -->
@@ -236,6 +236,13 @@
       sendDataToGAS(payload);
     });
 
+    // 重置表單並回歸預設狀態，準備掃下一筆
+    function resetFormToDefault() {
+      document.getElementById('single-entry-form').reset();
+      document.getElementById('quantity').value = "1"; // 數量重設為預設值 1
+      lastScannedCode = ""; // 清除記錄，允許再次掃描同一個條碼
+    }
+
     // ===== 功能 2: Excel 檔案讀取與預覽 =====
     let batchData = [];
 
@@ -290,13 +297,12 @@
       sendDataToGAS(batchData);
     });
 
-    // ===== 功能 3: 完美繞過 CORS 的跨網域上傳邏輯 =====
+    // ===== 功能 3: 傳送資料至 Google Apps Script API =====
     function sendDataToGAS(dataArray) {
       const btn = document.getElementById('btn-submit-single');
       btn.disabled = true;
       btn.textContent = '資料傳送中...';
 
-      // 使用 Web API fetch + redirect follow 防範跨網域轉擋
       fetch(GAS_WEB_APP_URL, {
         method: 'POST',
         mode: 'no-cors',
@@ -306,8 +312,12 @@
         body: JSON.stringify(dataArray)
       })
       .then(() => {
-        alert('✅ 進貨資料已送出！請至 Google 試算表確認。');
-        document.getElementById('single-entry-form').reset();
+        alert('✅ 進貨資料已送出！');
+        
+        // 重置表單，保持相機運作，準備掃下一筆
+        resetFormToDefault();
+
+        // 批次預覽區域一併重置
         document.getElementById('preview-container').classList.add('hidden');
         document.getElementById('excel-file').value = '';
         batchData = [];
