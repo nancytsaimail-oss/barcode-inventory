@@ -8,7 +8,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Quagga2 一維條碼專用掃描套件 -->
   <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
-  <!-- SheetJS (xlsx.full.min.js) 套件 -->
+  <!-- SheetJS (xlsx.full.min.js) 套件 (支援中文編碼) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     /* 修正 Quagga 產生的相機畫面顯示大小 */
@@ -83,11 +83,11 @@
 
     <hr class="my-8">
 
-    <!-- 功能 2: Excel 批次匯入區域 -->
+    <!-- 功能 2: Excel / CSV 批次匯入區域 -->
     <div class="space-y-4">
       <h2 class="text-lg font-semibold text-gray-700">Excel / CSV 批次匯入</h2>
       <div>
-        <input type="file" id="excel-file" accept=".xlsx, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+        <input type="file" id="excel-file" accept=".xlsx, .xls, .csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
       </div>
 
       <!-- 預覽表格 -->
@@ -239,11 +239,11 @@
     // 重置表單並回歸預設狀態，準備掃下一筆
     function resetFormToDefault() {
       document.getElementById('single-entry-form').reset();
-      document.getElementById('quantity').value = "1"; // 數量重設為預設值 1
-      lastScannedCode = ""; // 清除記錄，允許再次掃描同一個條碼
+      document.getElementById('quantity').value = "1";
+      lastScannedCode = "";
     }
 
-    // ===== 功能 2: Excel 檔案讀取與預覽 =====
+    // ===== 功能 2: Excel / CSV 檔案讀取與預覽（強化中文編碼支援） =====
     let batchData = [];
 
     document.getElementById('excel-file').addEventListener('change', function(e) {
@@ -251,29 +251,68 @@
       if (!file) return;
 
       const reader = new FileReader();
+      const isCsv = file.name.endsWith('.csv');
+
       reader.onload = function(evt) {
-        const data = new Uint8Array(evt.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        try {
+          let workbook;
+          const data = evt.target.result;
 
-        batchData = jsonData.map(row => ({
-          barcode: row['條碼'] || row['Barcode'] || '',
-          name: row['商品名稱'] || row['Name'] || '',
-          quantity: row['數量'] || row['Quantity'] || 0,
-          price: row['單價'] || row['Price'] || 0
-        }));
+          if (isCsv) {
+            // 處理 CSV 的中文 Big5 / ANSI 轉碼問題
+            let text = new TextDecoder('utf-8').decode(new Uint8Array(data));
+            // 若 UTF-8 解析出現替換字元 ，代表是繁體中文 Big5 編碼
+            if (text.includes('')) {
+              text = new TextDecoder('big5').decode(new Uint8Array(data));
+            }
+            workbook = XLSX.read(text, { type: 'string' });
+          } else {
+            // 處理 .xlsx / .xls 檔案
+            const arrayData = new Uint8Array(data);
+            workbook = XLSX.read(arrayData, { type: 'array' });
+          }
+          
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
-        renderPreviewTable(batchData);
+          // 模糊判斷與轉換欄位名稱
+          batchData = jsonData.map(row => {
+            const findValue = (keys) => {
+              for (let key of Object.keys(row)) {
+                if (keys.some(k => key.trim().toLowerCase() === k.toLowerCase())) {
+                  return row[key];
+                }
+              }
+              return '';
+            };
+
+            return {
+              barcode: String(findValue(['條碼', 'Barcode', '條形碼']) || '').trim(),
+              name: String(findValue(['商品名稱', '名稱', 'Name', '品名']) || '').trim(),
+              quantity: Number(findValue(['數量', 'Quantity', '進貨數量', 'Qty'])) || 1,
+              price: Number(findValue(['單價', 'Price', '價格'])) || 0
+            };
+          });
+
+          renderPreviewTable(batchData);
+        } catch (err) {
+          console.error("檔案讀取失敗:", err);
+          alert("檔案讀取失敗，請確認檔案格式是否正確！");
+        }
       };
+
       reader.readAsArrayBuffer(file);
     });
 
     function renderPreviewTable(data) {
       const tbody = document.getElementById('preview-body');
       tbody.innerHTML = '';
+
+      if (data.length === 0) {
+        alert("未讀取到有效的表格資料！");
+        return;
+      }
 
       data.forEach(item => {
         const tr = document.createElement('tr');
@@ -300,8 +339,10 @@
     // ===== 功能 3: 傳送資料至 Google Apps Script API =====
     function sendDataToGAS(dataArray) {
       const btn = document.getElementById('btn-submit-single');
+      const batchBtn = document.getElementById('btn-batch-submit');
+      
       btn.disabled = true;
-      btn.textContent = '資料傳送中...';
+      batchBtn.disabled = true;
 
       fetch(GAS_WEB_APP_URL, {
         method: 'POST',
@@ -314,7 +355,6 @@
       .then(() => {
         alert('✅ 進貨資料已送出！');
         
-        // 重置表單，保持相機運作，準備掃下一筆
         resetFormToDefault();
 
         // 批次預覽區域一併重置
@@ -328,7 +368,7 @@
       })
       .finally(() => {
         btn.disabled = false;
-        btn.textContent = '確認進貨';
+        batchBtn.disabled = false;
       });
     }
   </script>
