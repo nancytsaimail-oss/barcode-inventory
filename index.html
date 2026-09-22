@@ -29,12 +29,12 @@
         </div>
       </div>
 
-      <!-- 錯誤訊息顯示區 -->
+      <!-- 錯誤與提示訊息顯示區 -->
       <div id="camera-error" class="hidden mb-3 p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm"></div>
 
       <!-- 掃描畫面容器 -->
-      <div id="reader" class="w-full max-w-md mx-auto bg-black rounded-lg overflow-hidden min-h-[250px] flex items-center justify-center text-white text-sm">
-        尚未啟動相機
+      <div id="reader" class="w-full max-w-md mx-auto bg-black rounded-lg overflow-hidden min-h-[260px] flex items-center justify-center text-white text-sm">
+        按下上方按鈕啟動相機
       </div>
     </div>
 
@@ -43,11 +43,11 @@
       <h2 class="text-lg font-semibold text-gray-700 border-b pb-2">單筆進貨填寫</h2>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">商品條碼</label>
-        <input type="text" id="barcode" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="掃描或手動輸入條碼">
+        <input type="text" id="barcode" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-yellow-50 text-blue-900 font-bold" placeholder="對準條碼自動填入，或手動輸入">
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">商品名稱</label>
-        <input type="text" id="product-name" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="例如：蘋果">
+        <input type="text" id="product-name" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="例如：無印良品筆記本">
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -98,7 +98,7 @@
     // Google Apps Script Web App URL
     const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyrdD8MCcwx80jnC6BGXNUKEJ6pwp8KuogbjMm0MBZTh_yQLhbWV5hj7rJXE25CbwfqRA/exec";
 
-    // 提示聲 (Web Audio API)
+    // 嗶聲提示 (Web Audio API)
     function playBeep() {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -107,19 +107,21 @@
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.type = "sine";
-        osc.frequency.value = 1000;
-        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        osc.frequency.value = 1200;
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
         osc.start();
-        osc.stop(ctx.currentTime + 0.15);
+        osc.stop(ctx.currentTime + 0.12);
       } catch (e) {
-        console.warn("Audio Context Error:", e);
+        console.warn("Audio Error:", e);
       }
     }
 
-    // ===== 相機掃描控制邏輯 =====
+    // ===== 相機與一維條碼強化模組 =====
     let html5QrCode = null;
     let isCameraRunning = false;
-    let currentFacingMode = "environment"; // "environment" 後鏡頭, "user" 前鏡頭
+    let currentFacingMode = "environment";
+    let lastScannedCode = "";
+    let lastScannedTime = 0;
 
     const cameraErrorEl = document.getElementById('camera-error');
 
@@ -136,26 +138,30 @@
     async function startCamera() {
       hideError();
 
-      // 檢查 HTTPS 環境
+      // 檢查安全連線
       if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        showError("⚠️ 瀏覽器安全性限制：使用相機功能必須開啟 HTTPS 安全連線 (例如 GitHub Pages、Vercel) 或在 localhost 測試。");
+        showError("⚠️ 注意：手機瀏覽器要求必須使用 HTTPS 網址才能開啟相機進行條碼對焦。");
         return;
       }
 
       if (!html5QrCode) {
-        html5QrCode = new Html5Qrcode("reader");
+        // 開啟實驗性 BarcodeDetector 功能（大幅提升 EAN-13 商品條碼辨識率）
+        html5QrCode = new Html5Qrcode("reader", {
+          experimentalFeatures: {
+            useBarCodeDetectorIfSupported: true
+          }
+        });
       }
 
-      // 相機設定 (針對一維條碼強化: 設定寬高比)
+      // 相機參數：高幀率 + 高解析度請求
       const config = {
-        fps: 15,
-        qrbox: (viewfinderWidth, viewfinderHeight) => {
-          // 為適應長條形條碼，設定長方形掃描框
-          const width = Math.floor(viewfinderWidth * 0.8);
-          const height = Math.floor(viewfinderHeight * 0.4);
-          return { width: Math.max(width, 200), height: Math.max(height, 120) };
-        },
-        aspectRatio: 1.333333
+        fps: 20,
+        // 全畫面辨識，不使用 qrbox 裁切，有利於長條形一維條碼
+        videoConstraints: {
+          facingMode: currentFacingMode,
+          width: { min: 640, ideal: 1280, max: 1920 },
+          height: { min: 480, ideal: 720, max: 1080 }
+        }
       };
 
       try {
@@ -163,11 +169,24 @@
           { facingMode: currentFacingMode },
           config,
           (decodedText) => {
+            const now = Date.now();
+            // 防止同一個條碼在 2 秒內重複觸發
+            if (decodedText === lastScannedCode && (now - lastScannedTime) < 2000) {
+              return;
+            }
+            lastScannedCode = decodedText;
+            lastScannedTime = now;
+
             playBeep();
-            document.getElementById('barcode').value = decodedText;
+            const barcodeInput = document.getElementById('barcode');
+            barcodeInput.value = decodedText;
+            
+            // 閃爍視覺提示
+            barcodeInput.classList.add('bg-green-200');
+            setTimeout(() => barcodeInput.classList.remove('bg-green-200'), 500);
           },
           (errorMessage) => {
-            // 掃描中未辨識到條碼的連續 callback，無視即可
+            // 連續偵測中的 ignore callback
           }
         );
         isCameraRunning = true;
@@ -175,9 +194,7 @@
         console.error("相機啟動失敗:", err);
         isCameraRunning = false;
         if (err.toString().includes("NotAllowedError") || err.toString().includes("Permission")) {
-          showError("❌ 相機存取被拒絕！請檢查瀏覽器設定並允許相機權限。");
-        } else if (err.toString().includes("NotFoundError")) {
-          showError("❌ 找不到可用的相機裝置。");
+          showError("❌ 相機存取被拒絕，請點擊網址列鎖頭圖示允許開啟相機。");
         } else {
           showError("❌ 無法啟動相機：" + err);
         }
@@ -196,7 +213,6 @@
       }
     }
 
-    // 開關相機按鈕
     document.getElementById('btn-toggle-camera').addEventListener('click', async () => {
       if (isCameraRunning) {
         await stopCamera();
@@ -205,7 +221,6 @@
       }
     });
 
-    // 切換前後鏡頭
     document.getElementById('btn-switch-camera').addEventListener('click', async () => {
       currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
       if (isCameraRunning) {
@@ -214,7 +229,6 @@
       }
     });
 
-    // 頁面載入後自動嘗試啟動相機
     window.addEventListener('DOMContentLoaded', () => {
       startCamera();
     });
