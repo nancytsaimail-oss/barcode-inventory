@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>庫存進貨系統3</title>
+  <title>庫存進貨系統</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Quagga2 一維條碼專用掃描套件 -->
@@ -76,7 +76,7 @@
           <input type="number" id="unit-price" min="0" step="0.1" required class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="0">
         </div>
       </div>
-      <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition">
+      <button id="btn-submit-single" type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition">
         確認進貨
       </button>
     </form>
@@ -151,7 +151,7 @@
           type: "LiveStream",
           target: document.querySelector("#interactive"),
           constraints: {
-            facingMode: "environment", // 使用後鏡頭
+            facingMode: "environment",
             width: { ideal: 1280 },
             height: { ideal: 720 }
           }
@@ -163,9 +163,9 @@
         numOfWorkers: 2,
         decoder: {
           readers: [
-            "ean_reader",      // 台灣/日本常用商品 13 碼條碼 (JAN / EAN-13)
+            "ean_reader",      // 13 碼條碼 (JAN / EAN-13)
             "ean_8_reader",    // 8 碼條碼
-            "code_128_reader", // 物流/一般商品 128 條碼
+            "code_128_reader", // 物流/128 條碼
             "upc_reader"       // 美規 UPC 條碼
           ]
         },
@@ -181,14 +181,12 @@
         isCameraRunning = true;
       });
 
-      // 監聽成功辨識事件
       Quagga.onDetected(function(result) {
         if (!result || !result.codeResult) return;
 
         const code = result.codeResult.code;
         const now = Date.now();
 
-        // 防止 2 秒內重複觸發
         if (code === lastScannedCode && (now - lastScannedTime) < 2000) {
           return;
         }
@@ -198,11 +196,9 @@
 
         playBeep();
         
-        // 帶入條碼
         const barcodeInput = document.getElementById('barcode');
         barcodeInput.value = code;
 
-        // 輸入框綠色閃爍效果
         barcodeInput.classList.add('bg-green-200');
         setTimeout(() => barcodeInput.classList.remove('bg-green-200'), 500);
       });
@@ -223,7 +219,6 @@
       }
     });
 
-    // 頁面開啟自動啟動相機
     window.addEventListener('DOMContentLoaded', () => {
       initQuagga();
     });
@@ -295,14 +290,13 @@
       sendDataToGAS(batchData);
     });
 
-    // ===== 功能 3: 傳送資料至 Google Apps Script API (已修正 CORS 與傳輸模式) =====
+    // ===== 功能 3: 完美繞過 CORS 的跨網域上傳邏輯 =====
     function sendDataToGAS(dataArray) {
-      if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes("YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL")) {
-        alert("請先設定 GAS_WEB_APP_URL 網址！");
-        return;
-      }
+      const btn = document.getElementById('btn-submit-single');
+      btn.disabled = true;
+      btn.textContent = '資料傳送中...';
 
-      // 使用 text/plain 搭配 no-cors 模式，防止 GitHub Pages 跨網域請求被瀏覽器擋下
+      // 使用 Web API fetch + redirect follow 防範跨網域轉擋
       fetch(GAS_WEB_APP_URL, {
         method: 'POST',
         mode: 'no-cors',
@@ -312,15 +306,19 @@
         body: JSON.stringify(dataArray)
       })
       .then(() => {
-        alert(`進貨資料已成功送出！請至 Google 試算表確認。`);
+        alert('✅ 進貨資料已送出！請至 Google 試算表確認。');
         document.getElementById('single-entry-form').reset();
         document.getElementById('preview-container').classList.add('hidden');
         document.getElementById('excel-file').value = '';
         batchData = [];
       })
       .catch(err => {
-        console.error(err);
-        alert('上傳失敗：' + err.message);
+        console.error("傳送錯誤：", err);
+        alert('⚠️ 傳送失敗：' + err);
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = '確認進貨';
       });
     }
   </script>
